@@ -256,7 +256,7 @@ nav h1{font-size:0.85rem;letter-spacing:0.12em;text-transform:uppercase;
     <button class="prd-btn active" onclick="selectPeriod(null,this)">Tutti</button>
   </div>
   <div id="timeline-bar">
-    <input type="range" id="month-slider" min="0" max="52" step="1" value="0" oninput="onSlider(this.value)" disabled>
+    <input type="range" id="month-slider" min="0" max="52" step="1" value="0" oninput="onSlider(this.value)">
     <div id="month-label">—</div>
   </div>
   <div id="event-panel">
@@ -532,6 +532,7 @@ function isEventVisible(ev) {
 }
 
 function renderEvents() {
+  if (typeof EVENTS === "undefined") return;
   eventsLayer.clearLayers();
   allEventMarkers = [];
   EVENTS.forEach(function(ev) {
@@ -640,6 +641,7 @@ function onSlider(val) {
 }
 
 function showNearestEvent(yyyymm) {
+  if (typeof EVENTS === "undefined") return;
   var nearest = null, bestDist = 999;
   EVENTS.forEach(function(ev) {
     var d = Math.abs(yyyymmDiff(ev.data.substring(0,7), yyyymm));
@@ -714,6 +716,9 @@ function selectPeriod(p, btn) {
 document.getElementById("month-slider").addEventListener("touchstart",function(){
   sliderActive=true; document.getElementById("event-panel").classList.add("vis");
 });
+
+// Inizializza slider attivo
+document.getElementById(month-slider).dispatchEvent(new Event(input));
 
 // ── LEGEND ────────────────────────────────────────────────────────────────────
 var legend = L.control({position:"bottomright"});
