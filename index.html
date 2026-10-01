@@ -334,34 +334,44 @@ var SCH_LABELS = {intesa:"Intesa", imp_centrali:"Imp. Centrali", neutrale:"Neutr
 var TIPO_ICONS = {bellico:"⚔️", diplomatico:"📜", navale:"⚓", atrocita:"⚠️"};
 var FRONTE_LABELS = {occidentale:"Fronte Occidentale", orientale:"Fronte Orientale",
   italiano:"Fronte Italiano", balcanico:"Balcani", medio_oriente:"Medio Oriente", mare:"Guerra Navale"};
+var TYPE_COLORS = {bellico:"#c0392b", diplomatico:"#2980b9", navale:"#16a085", atrocita:"#8e44ad"};
 
-// Mesi della guerra: luglio 1914 → novembre 1918 = 53 mesi
-function monthIndexToYYYYMM(idx) {
-  var y = 1914 + Math.floor((idx + 6) / 12);
-  var m = ((idx + 6) % 12) + 1;
+// Mesi: 0=Lug1914 ... 52=Nov1918
+function idxToYYYYMM(idx) {
+  var totalMese = 6 + parseInt(idx); // 0=gen, 6=lug
+  var y = 1914 + Math.floor(totalMese / 12);
+  var m = (totalMese % 12) + 1;
   return y + "-" + (m<10?"0":"") + m;
 }
 function formatMonth(yyyymm) {
-  var parts = yyyymm.split("-");
-  return MONTHS[parseInt(parts[1])-1] + " " + parts[0];
+  var p = yyyymm.split("-");
+  return MONTHS[parseInt(p[1])-1] + " " + p[0];
 }
-function dateCmp(a, b) { return a <= b; }
+function yyyymmToIdx(yyyymm) {
+  var p = yyyymm.split("-");
+  return (parseInt(p[0])-1914)*12 + parseInt(p[1]) - 7;
+}
+
+// Stato globale
+var currentYYYYMM = "1914-07";
+var activeFronte = null;
+var activeTipo = null;
 
 // ── NAV ─────────────────────────────────────────────────────────────────────
 function showSection(id, btn) {
   document.querySelectorAll(".section").forEach(function(s){s.classList.remove("active");});
-  document.getElementById("sec-" + id).classList.add("active");
+  document.getElementById("sec-"+id).classList.add("active");
   document.querySelectorAll(".nav-tab").forEach(function(b){b.classList.remove("active");});
   btn.classList.add("active");
-  if (id === "armamenti") renderWeapons();
-  if (id === "perdite") initPerditeSection();
+  if (id==="armamenti") renderWeapons();
+  if (id==="perdite") initPerditeSection();
 }
 
 // ── MAP ─────────────────────────────────────────────────────────────────────
-var map = L.map("map", {center:[48,16], zoom:4, minZoom:3, maxZoom:9});
+var map = L.map("map",{center:[48,16],zoom:4,minZoom:3,maxZoom:9});
 var tileProviders = [
-  {url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", opts:{attribution:"&copy; Esri", maxZoom:18}},
-  {url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png", opts:{attribution:"&copy; OpenStreetMap", maxZoom:19}},
+  {url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",opts:{attribution:"&copy; Esri",maxZoom:18}},
+  {url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",opts:{attribution:"&copy; OpenStreetMap",maxZoom:19}}
 ];
 var tileIdx=0, baseTile=null;
 function tryTile(){
@@ -378,198 +388,116 @@ tryTile();
 
 // ── BORDERS ─────────────────────────────────────────────────────────────────
 var bordersLayer = L.layerGroup().addTo(map);
-var nationLayers = {}; // geo_name → layer
-
-function getSchColor(nation, year) {
-  var sch = nation.schieramento[String(year)] || "neutrale";
-  return {color:SCH_COLORS[sch], label:SCH_LABELS[sch], id:sch};
-}
-
-function showBorderError() {
-  var info = L.control({position:"topleft"});
-  info.onAdd = function(){
-    var d = L.DomUtil.create("div");
-    d.style.cssText = "background:rgba(139,26,26,0.9);color:#f0d0d0;padding:8px 12px;font-size:0.7rem;border-radius:3px;max-width:240px;";
-    d.innerHTML = "<strong>⚠️ borders_1914.js non caricato</strong><br>Assicurati che il file sia nella cartella <code>data/</code> del repository.";
-    return d;
-  };
-  if (!map._borderErrorShown) {
-    info.addTo(map);
-    map._borderErrorShown = true;
-  }
-}
-
 function renderBorders(year) {
   bordersLayer.clearLayers();
-  nationLayers = {};
-  if (!BORDERS_1914 || !BORDERS_1914.features) return;
-  // Trova nation per geo_name
-  var nationMap = {};
-  NATIONS.forEach(function(n){ if(n.geo_name) nationMap[n.geo_name]=n; });
-
-  BORDERS_1914.features.forEach(function(feat) {
-    var geoName = feat.properties.NAME;
-    var nation = nationMap[geoName];
-    var sch = feat.properties.sch || "neutrale";
-    var color = SCH_COLORS[sch];
-    // Override per anno se nazione presente
-    if (nation) {
-      var s = nation.schieramento[String(year)];
-      if(s) { sch=s; color=SCH_COLORS[s]; }
-    }
-    var layer = L.geoJSON(feat, {
-      style: { fillColor:color, fillOpacity:0.35, color:"#1a1a20", weight:0.8, opacity:0.7 }
-    });
-    if (nation) {
-      layer.on("click", function(e) {
-        L.DomEvent.stopPropagation(e);
-        showNationPanel(nation, year);
-      });
-      layer.on("mouseover", function() {
-        layer.setStyle({fillOpacity:0.55});
-      });
-      layer.on("mouseout", function() {
-        layer.setStyle({fillOpacity:0.35});
-      });
+  if(!BORDERS_1914||!BORDERS_1914.features)return;
+  var nationMap={};
+  NATIONS.forEach(function(n){if(n.geo_name)nationMap[n.geo_name]=n;});
+  BORDERS_1914.features.forEach(function(feat){
+    var geoName=feat.properties.NAME;
+    var nation=nationMap[geoName];
+    var sch=feat.properties.sch||"neutrale";
+    var color=SCH_COLORS[sch];
+    if(nation){var s=nation.schieramento[String(year)];if(s){sch=s;color=SCH_COLORS[s];}}
+    var layer=L.geoJSON(feat,{style:{fillColor:color,fillOpacity:0.35,color:"#1a1a20",weight:0.8,opacity:0.7}});
+    if(nation){
+      layer.on("click",function(e){L.DomEvent.stopPropagation(e);showNationPanel(nation,year);});
+      layer.on("mouseover",function(){layer.setStyle({fillOpacity:0.55});});
+      layer.on("mouseout",function(){layer.setStyle({fillOpacity:0.35});});
     }
     bordersLayer.addLayer(layer);
-    if(geoName) nationLayers[geoName] = layer;
   });
 }
-
-if (typeof BORDERS_1914 !== "undefined") {
-  renderBorders(1914);
-} else {
-  showBorderError();
-}
+renderBorders(1914);
 
 // ── NATION PANEL ─────────────────────────────────────────────────────────────
-function showNationPanel(nation, year) {
-  var yr = String(year);
-  var sch = nation.schieramento[yr] || "neutrale";
-  var dati = nation.anni[yr] || nation.anni[Object.keys(nation.anni)[0]];
-  document.getElementById("np-flag").textContent = nation.bandiera || "";
-  document.getElementById("np-nome").textContent = nation.nome;
-  document.getElementById("np-sch").textContent = SCH_LABELS[sch];
-  document.getElementById("np-sch").style.color = sch==="intesa"?"#5a8abf":sch==="imp_centrali"?"#bf5a5a":"#888";
-  document.getElementById("np-anno").textContent = "Anno " + yr;
-  document.getElementById("np-desc").textContent = dati ? dati.desc : "";
-  var p = dati ? dati.perdite_cumulative : 0;
-  document.getElementById("np-perdite").textContent = p > 0 ? "Perdite cumulative: " + p.toLocaleString("it") : "";
+function showNationPanel(nation,year){
+  var yr=String(year);
+  var sch=nation.schieramento[yr]||"neutrale";
+  var dati=nation.anni[yr]||nation.anni[Object.keys(nation.anni)[0]];
+  document.getElementById("np-flag").textContent=nation.bandiera||"";
+  document.getElementById("np-nome").textContent=nation.nome;
+  document.getElementById("np-sch").textContent=SCH_LABELS[sch];
+  document.getElementById("np-sch").style.color=sch==="intesa"?"#5a8abf":sch==="imp_centrali"?"#bf5a5a":"#888";
+  document.getElementById("np-anno").textContent="Anno "+yr;
+  document.getElementById("np-desc").textContent=dati?dati.desc:"";
+  var p=dati?dati.perdite_cumulative:0;
+  document.getElementById("np-perdite").textContent=p>0?"Perdite cumulative: "+p.toLocaleString("it"):"";
   document.getElementById("nation-panel").classList.add("vis");
 }
-function closeNationPanel() {
-  document.getElementById("nation-panel").classList.remove("vis");
-}
-map.on("click", closeNationPanel);
+function closeNationPanel(){document.getElementById("nation-panel").classList.remove("vis");}
+map.on("click",closeNationPanel);
 
-// ── EVENTS ───────────────────────────────────────────────────────────────────
+// ── EVENTS ────────────────────────────────────────────────────────────────────
 var eventsLayer = L.layerGroup().addTo(map);
 var allEventMarkers = [];
-var activeFronte = null, activeTipo = null;
-var sliderActive = false;
-var currentYYYYMM = "1914-07";
 
-var TYPE_COLORS = {
-  bellico:"#c0392b", diplomatico:"#2980b9",
-  navale:"#16a085", atrocita:"#8e44ad"
-};
-
-function makeEventIcon(tipo) {
-  var c = TYPE_COLORS[tipo] || "#888";
-  var icon = TIPO_ICONS[tipo] || "●";
-  return L.divIcon({
-    className:"",
-    html:"<div style='width:22px;height:22px;background:"+c+";border-radius:50%;"+
-         "border:2px solid rgba(255,255,255,0.3);display:flex;align-items:center;"+
-         "justify-content:center;font-size:10px;box-shadow:0 2px 6px rgba(0,0,0,0.5)'>"+icon+"</div>",
-    iconSize:[22,22], iconAnchor:[11,11]
-  });
+function makeEventIcon(tipo){
+  var c=TYPE_COLORS[tipo]||"#888";
+  var icon=TIPO_ICONS[tipo]||"●";
+  return L.divIcon({className:"",
+    html:"<div style='width:22px;height:22px;background:"+c+";border-radius:50%;border:2px solid rgba(255,255,255,0.3);display:flex;align-items:center;justify-content:center;font-size:10px;box-shadow:0 2px 6px rgba(0,0,0,0.5)'>"+icon+"</div>",
+    iconSize:[22,22],iconAnchor:[11,11]});
 }
 
-function makeMortiBar(n, max_n) {
-  var pct = max_n > 0 ? Math.min(100, Math.round(n/max_n*100)) : 0;
-  return "<div class='pp-bar' style='width:"+pct+"%;max-width:100%;'></div>";
-}
-
-function makeEventPopup(ev) {
-  var maxM = Math.max(ev.morti_a||0, ev.morti_b||0, 1);
-  var h = "<div class='pp-title'>" + (TIPO_ICONS[ev.tipo]||"") + " " + ev.nome + "</div>";
-  h += "<div class='pp-meta'>";
-  h += "<span class='pp-badge' style='color:" + (TYPE_COLORS[ev.tipo]||"#888") + ";border-color:" + (TYPE_COLORS[ev.tipo]||"#888") + "40'>" + ev.tipo + "</span>";
-  if(ev.fronte) h += "<span class='pp-badge' style='color:#8a7050;border-color:#3a2a0a'>" + (FRONTE_LABELS[ev.fronte]||ev.fronte) + "</span>";
-  h += "<span class='pp-badge' style='color:#5a5040;border-color:#2a2010'>" + ev.data + "</span>";
-  h += "</div>";
-  h += "<div class='pp-desc'>" + ev.desc + "</div>";
-  if ((ev.morti_a||0) + (ev.morti_b||0) > 0) {
-    h += "<div class='pp-deaths'>";
-    if (ev.morti_a > 0) {
-      h += "<div class='pp-death-col'>";
-      h += "<div class='pp-death-label'>" + (ev.sch_a||"Parte A") + "</div>";
-      h += "<div class='pp-death-num'>" + ev.morti_a.toLocaleString("it") + "</div>";
-      h += makeMortiBar(ev.morti_a, maxM);
-      h += "</div>";
-    }
-    if (ev.morti_b > 0) {
-      h += "<div class='pp-death-col'>";
-      h += "<div class='pp-death-label'>" + (ev.sch_b||"Parte B") + "</div>";
-      h += "<div class='pp-death-num'>" + ev.morti_b.toLocaleString("it") + "</div>";
-      h += makeMortiBar(ev.morti_b, maxM);
-      h += "</div>";
-    }
-    h += "</div>";
+function makeEventPopup(ev){
+  var maxM=Math.max(ev.morti_a||0,ev.morti_b||0,1);
+  var h="<div class='pp-title'>"+(TIPO_ICONS[ev.tipo]||"")+" "+ev.nome+"</div>";
+  h+="<div class='pp-meta'>";
+  h+="<span class='pp-badge' style='color:"+(TYPE_COLORS[ev.tipo]||"#888")+";border-color:"+(TYPE_COLORS[ev.tipo]||"#888")+"40'>"+ev.tipo+"</span>";
+  if(ev.fronte)h+="<span class='pp-badge' style='color:#8a7050;border-color:#3a2a0a'>"+(FRONTE_LABELS[ev.fronte]||ev.fronte)+"</span>";
+  h+="<span class='pp-badge' style='color:#5a5040;border-color:#2a2010'>"+ev.data+"</span></div>";
+  h+="<div class='pp-desc'>"+ev.desc+"</div>";
+  if((ev.morti_a||0)+(ev.morti_b||0)>0){
+    h+="<div class='pp-deaths'>";
+    if(ev.morti_a>0)h+="<div class='pp-death-col'><div class='pp-death-label'>"+(ev.sch_a||"A")+"</div><div class='pp-death-num'>"+ev.morti_a.toLocaleString("it")+"</div><div class='pp-bar' style='width:"+Math.max(2,Math.round(ev.morti_a/maxM*100))+"%;background:#8B1A1A'></div></div>";
+    if(ev.morti_b>0)h+="<div class='pp-death-col'><div class='pp-death-label'>"+(ev.sch_b||"B")+"</div><div class='pp-death-num'>"+ev.morti_b.toLocaleString("it")+"</div><div class='pp-bar' style='width:"+Math.max(2,Math.round(ev.morti_b/maxM*100))+"%;background:#1A3A8B'></div></div>";
+    h+="</div>";
   }
-  if(ev.esito) h += "<div class='pp-esito'>" + ev.esito + "</div>";
-  if(ev.wiki) h += "<div class='pp-wiki'><a href='https://en.wikipedia.org/wiki/" + ev.wiki + "' target='_blank'>Wikipedia →</a></div>";
+  if(ev.esito)h+="<div class='pp-esito'>"+ev.esito+"</div>";
+  if(ev.wiki)h+="<div class='pp-wiki'><a href='https://en.wikipedia.org/wiki/"+ev.wiki+"' target='_blank'>Wikipedia →</a></div>";
   return h;
 }
 
-function isEventVisible(ev) {
-  if (activeFronte && ev.fronte !== activeFronte) return false;
-  if (activeTipo && ev.tipo !== activeTipo) return false;
-  if (sliderActive && ev.data > currentYYYYMM) return false;
+function isEventVisible(ev){
+  if(activeFronte&&ev.fronte!==activeFronte)return false;
+  if(activeTipo&&ev.tipo!==activeTipo)return false;
+  // Mostra evento se la sua data è <= mese corrente
+  if(ev.data.substring(0,7)>currentYYYYMM)return false;
   return true;
 }
 
-function renderEvents() {
-  if (typeof EVENTS === "undefined") return;
+function renderEvents(){
   eventsLayer.clearLayers();
-  allEventMarkers = [];
-  EVENTS.forEach(function(ev) {
-    if (!ev.lat || !ev.lng) return;
-    var marker = L.marker([ev.lat, ev.lng], {icon: makeEventIcon(ev.tipo)});
-    marker.bindPopup(makeEventPopup(ev), {maxWidth:280});
-    allEventMarkers.push({marker:marker, ev:ev});
-    if (isEventVisible(ev)) eventsLayer.addLayer(marker);
+  allEventMarkers=[];
+  EVENTS.forEach(function(ev){
+    if(!ev.lat||!ev.lng)return;
+    var marker=L.marker([ev.lat,ev.lng],{icon:makeEventIcon(ev.tipo)});
+    marker.bindPopup(makeEventPopup(ev),{maxWidth:280});
+    allEventMarkers.push({marker:marker,ev:ev});
   });
+  updateEventVisibility();
 }
-renderEvents();
 
-function updateEventVisibility() {
-  allEventMarkers.forEach(function(item) {
-    if (isEventVisible(item.ev)) {
-      if (!eventsLayer.hasLayer(item.marker)) eventsLayer.addLayer(item.marker);
-    } else {
-      if (eventsLayer.hasLayer(item.marker)) eventsLayer.removeLayer(item.marker);
+function updateEventVisibility(){
+  allEventMarkers.forEach(function(item){
+    if(isEventVisible(item.ev)){
+      if(!eventsLayer.hasLayer(item.marker))eventsLayer.addLayer(item.marker);
+    }else{
+      if(eventsLayer.hasLayer(item.marker))eventsLayer.removeLayer(item.marker);
     }
   });
 }
 
-function filterFronte(val, btn) {
-  activeFronte = val;
-  document.querySelectorAll("#filter-row .flt-btn").forEach(function(b){
-    if(b.textContent.includes("Tutti")||b.getAttribute("onclick").includes("filterFronte"))
-      b.classList.remove("active");
-  });
+function filterFronte(val,btn){
+  activeFronte=val;
+  document.querySelectorAll("[onclick^='filterFronte']").forEach(function(b){b.classList.remove("active");});
   btn.classList.add("active");
   updateEventVisibility();
 }
-function filterTipo(val, btn) {
-  activeTipo = val;
-  document.querySelectorAll("#filter-row .flt-btn").forEach(function(b){
-    if(b.getAttribute("onclick") && b.getAttribute("onclick").includes("filterTipo"))
-      b.classList.remove("active");
-  });
+function filterTipo(val,btn){
+  activeTipo=val;
+  document.querySelectorAll("[onclick^='filterTipo']").forEach(function(b){b.classList.remove("active");});
   btn.classList.add("active");
   updateEventVisibility();
 }
@@ -578,45 +506,38 @@ function filterTipo(val, btn) {
 var frontsLayer = L.layerGroup().addTo(map);
 var movLayer = L.layerGroup().addTo(map);
 
-function getFrontForMonth(yyyymm) {
-  var matches = FRONTS.filter(function(f){ return f.mese <= yyyymm; });
-  // Group by fronte, take latest for each
-  var best = {};
-  matches.forEach(function(f){
-    if(!best[f.fronte] || f.mese > best[f.fronte].mese) best[f.fronte]=f;
+function getFrontsForMonth(yyyymm){
+  var best={};
+  FRONTS.forEach(function(f){
+    if(f.mese<=yyyymm){
+      if(!best[f.fronte]||f.mese>best[f.fronte].mese)best[f.fronte]=f;
+    }
   });
   return Object.values(best);
 }
 
-function renderFronts(yyyymm) {
+function renderFronts(yyyymm){
   frontsLayer.clearLayers();
-  if (!sliderActive) return;
-  var frontsToShow = getFrontForMonth(yyyymm);
-  frontsToShow.forEach(function(fr) {
-    var line = L.polyline(fr.coordinates.map(function(c){return[c[1],c[0]];}), {
-      color: fr.colore, weight:3, opacity:0.85,
-      dashArray: fr.fronte==="orientale"?"6,4":null
-    });
-    line.bindTooltip(fr.label, {sticky:true, className:"leaflet-tooltip"});
+  var toShow=getFrontsForMonth(yyyymm);
+  toShow.forEach(function(fr){
+    var pts=fr.coordinates.map(function(c){return[c[1],c[0]];});
+    var line=L.polyline(pts,{color:fr.colore,weight:3,opacity:0.9,
+      dashArray:fr.fronte==="orientale"?"6,4":null});
+    line.bindTooltip(fr.label,{sticky:true});
     frontsLayer.addLayer(line);
   });
 }
 
-function renderMovements(yyyymm) {
+function renderMovements(yyyymm){
   movLayer.clearLayers();
-  if (!sliderActive) return;
-  MOVEMENTS.forEach(function(mov) {
-    if (mov.mese > yyyymm) return;
-    mov.frecce.forEach(function(fr) {
-      var pts = [[fr.da[1],fr.da[0]], [fr.a[1],fr.a[0]]];
-      var arrow = L.polyline(pts, {color:mov.colore, weight:2.5, opacity:0.75});
-      // Simple arrowhead with a marker at endpoint
-      var icon = L.divIcon({
-        className:"",
-        html:"<div style='width:8px;height:8px;border-right:2px solid "+mov.colore+
-             ";border-top:2px solid "+mov.colore+";transform:rotate(45deg);opacity:0.75'></div>",
-        iconSize:[8,8],iconAnchor:[4,4]
-      });
+  MOVEMENTS.forEach(function(mov){
+    if(mov.mese>yyyymm)return;
+    mov.frecce.forEach(function(fr){
+      var pts=[[fr.da[1],fr.da[0]],[fr.a[1],fr.a[0]]];
+      var arrow=L.polyline(pts,{color:mov.colore,weight:2.5,opacity:0.8});
+      var icon=L.divIcon({className:"",
+        html:"<div style='width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid "+mov.colore+";opacity:0.85;transform:rotate(90deg)'></div>",
+        iconSize:[10,10],iconAnchor:[5,5]});
       L.marker([fr.a[1],fr.a[0]],{icon:icon}).addTo(movLayer);
       movLayer.addLayer(arrow);
     });
@@ -624,264 +545,140 @@ function renderMovements(yyyymm) {
 }
 
 // ── SLIDER ────────────────────────────────────────────────────────────────────
-function onSlider(val) {
-  sliderActive = true;
-  var idx = parseInt(val);
-  currentYYYYMM = monthIndexToYYYYMM(idx);
+function onSlider(val){
+  currentYYYYMM = idxToYYYYMM(val);
   document.getElementById("month-label").textContent = formatMonth(currentYYYYMM);
-  // Anno corrente
   var year = parseInt(currentYYYYMM.split("-")[0]);
   renderBorders(year);
   renderFronts(currentYYYYMM);
   renderMovements(currentYYYYMM);
   updateEventVisibility();
-  // Evento più vicino
   showNearestEvent(currentYYYYMM);
   document.getElementById("event-panel").classList.add("vis");
 }
 
-function showNearestEvent(yyyymm) {
-  if (typeof EVENTS === "undefined") return;
-  var nearest = null, bestDist = 999;
-  EVENTS.forEach(function(ev) {
-    var d = Math.abs(yyyymmDiff(ev.data.substring(0,7), yyyymm));
-    if (d < bestDist) { bestDist=d; nearest=ev; }
+function showNearestEvent(yyyymm){
+  if(typeof EVENTS==="undefined")return;
+  // Cerca l'evento più vicino al mese corrente (già passato, entro 2 mesi)
+  var nearest=null,bestDist=999;
+  EVENTS.forEach(function(ev){
+    var d=yyyymmDiff(yyyymm,ev.data.substring(0,7));
+    if(d>=0&&d<bestDist){bestDist=d;nearest=ev;}
   });
-  if (nearest && bestDist <= 2) {
+  if(nearest&&bestDist<=2){
     document.getElementById("evdot").style.display="block";
-    document.getElementById("evtitle").textContent = nearest.nome;
-    document.getElementById("evdate").textContent = nearest.data;
-    document.getElementById("evdesc").textContent = nearest.desc.substring(0,150) + "...";
-    document.getElementById("evtype").textContent = (TIPO_ICONS[nearest.tipo]||"") + " " + nearest.tipo + (nearest.fronte?" — "+(FRONTE_LABELS[nearest.fronte]||nearest.fronte):"");
-  } else {
+    document.getElementById("evtitle").textContent=nearest.nome;
+    document.getElementById("evdate").textContent=nearest.data;
+    document.getElementById("evdesc").textContent=nearest.desc.substring(0,160)+(nearest.desc.length>160?"...":"");
+    document.getElementById("evtype").textContent=(TIPO_ICONS[nearest.tipo]||"")+" "+nearest.tipo+(nearest.fronte?" — "+(FRONTE_LABELS[nearest.fronte]||nearest.fronte):"");
+  }else{
     document.getElementById("evdot").style.display="none";
-    document.getElementById("evtitle").textContent = "";
-    document.getElementById("evdate").textContent = "";
-    document.getElementById("evdesc").textContent = "";
-    document.getElementById("evtype").textContent = "";
+    document.getElementById("evtitle").textContent="";
+    document.getElementById("evdate").textContent="";
+    document.getElementById("evdesc").textContent="";
+    document.getElementById("evtype").textContent="";
   }
 }
 
-function yyyymmDiff(a, b) {
-  var ap=a.split("-"), bp=b.split("-");
-  return (parseInt(ap[0])-parseInt(bp[0]))*12 + (parseInt(ap[1])-parseInt(bp[1]));
+function yyyymmDiff(a,b){
+  var ap=a.split("-"),bp=b.split("-");
+  return(parseInt(ap[0])-parseInt(bp[0]))*12+(parseInt(ap[1])-parseInt(bp[1]));
 }
 
 // ── PERIODS ────────────────────────────────────────────────────────────────────
-var periodBar = document.getElementById("period-bar");
-PERIODS.forEach(function(p) {
-  var btn = document.createElement("button");
+var periodBar=document.getElementById("period-bar");
+PERIODS.forEach(function(p){
+  var btn=document.createElement("button");
   btn.className="prd-btn";
-  btn.textContent = p.short;
-  btn.title = p.label + " (" + formatMonth(p.inizio) + " – " + formatMonth(p.fine) + ")\n" + p.desc;
-  btn.addEventListener("click", function(){ selectPeriod(p, btn); });
+  btn.textContent=p.short;
+  btn.title=p.label+"\n"+p.desc;
+  btn.addEventListener("click",function(){
+    document.querySelectorAll(".prd-btn").forEach(function(b){b.classList.remove("active");});
+    btn.classList.add("active");
+    // Salta al mese di inizio del periodo (senza bloccare lo slider)
+    var slider=document.getElementById("month-slider");
+    var idx=yyyymmToIdx(p.inizio);
+    slider.value=Math.max(0,Math.min(52,idx));
+    onSlider(slider.value);
+  });
   periodBar.appendChild(btn);
 });
 
-function selectPeriod(p, btn) {
-  document.querySelectorAll(".prd-btn").forEach(function(b){b.classList.remove("active");});
-  btn.classList.add("active");
-  var slider = document.getElementById("month-slider");
-  if (p) {
-    sliderActive = true;
-    slider.disabled = false;
-    // Calcola idx per inizio periodo
-    var parts = p.inizio.split("-");
-    var idx = (parseInt(parts[0])-1914)*12 + parseInt(parts[1]) - 7;
-    slider.min = Math.max(0, idx);
-    // Fine
-    var fp = p.fine.split("-");
-    var fidx = (parseInt(fp[0])-1914)*12 + parseInt(fp[1]) - 7;
-    slider.max = Math.min(52, fidx);
-    slider.value = idx;
-    onSlider(idx);
-    document.getElementById("event-panel").classList.add("vis");
-  } else {
-    sliderActive = false;
-    slider.disabled = true;
-    slider.min=0; slider.max=52;
-    document.getElementById("month-label").textContent = "—";
-    document.getElementById("event-panel").classList.remove("vis");
-    if (typeof BORDERS_1914 !== "undefined") {
-  renderBorders(1914);
-} else {
-  showBorderError();
-}
-    frontsLayer.clearLayers();
-    movLayer.clearLayers();
-    updateEventVisibility();
-  }
-}
-
-document.getElementById("month-slider").addEventListener("touchstart",function(){
-  sliderActive=true; document.getElementById("event-panel").classList.add("vis");
-});
-
-// Inizializza slider attivo
-document.getElementById(month-slider).dispatchEvent(new Event(input));
-
 // ── LEGEND ────────────────────────────────────────────────────────────────────
-var legend = L.control({position:"bottomright"});
-legend.onAdd = function() {
-  var div = L.DomUtil.create("div","legend");
-  div.innerHTML = "<h4>Schieramenti</h4>";
+var legend=L.control({position:"bottomright"});
+legend.onAdd=function(){
+  var div=L.DomUtil.create("div","legend");
+  div.innerHTML="<h4>Schieramenti</h4>";
   [{id:"intesa",label:"Intesa",color:"#1e3a6e"},
    {id:"imp_centrali",label:"Imp. Centrali",color:"#6e1e1e"},
    {id:"neutrale",label:"Neutrali",color:"#2a2a30"}
   ].forEach(function(s){
-    div.innerHTML += "<div class='leg-item'><div class='leg-sq' style='background:"+s.color+";border:1px solid #444'></div><span>"+s.label+"</span></div>";
+    div.innerHTML+="<div class='leg-item'><div class='leg-sq' style='background:"+s.color+";border:1px solid #444'></div><span>"+s.label+"</span></div>";
   });
-  div.innerHTML += "<div class='leg-sep'></div><h4>Tipi evento</h4>";
+  div.innerHTML+="<div class='leg-sep'></div><h4>Tipi evento</h4>";
   Object.keys(TIPO_ICONS).forEach(function(t){
-    div.innerHTML += "<div class='leg-item'><div class='leg-dot' style='background:"+TYPE_COLORS[t]+"'></div><span>"+TIPO_ICONS[t]+" "+t+"</span></div>";
+    div.innerHTML+="<div class='leg-item'><div class='leg-dot' style='background:"+TYPE_COLORS[t]+"'></div><span>"+TIPO_ICONS[t]+" "+t+"</span></div>";
   });
-  div.innerHTML += "<div class='leg-sep'></div>";
-  div.innerHTML += "<div style='font-size:0.58rem;color:#444;'>Clicca su uno stato per dettagli</div>";
+  div.innerHTML+="<div class='leg-sep'></div><div style='font-size:0.58rem;color:#444;'>Clicca su uno stato per dettagli</div>";
   L.DomEvent.disableClickPropagation(div);
   return div;
 };
 legend.addTo(map);
 
 // ── WEAPONS ────────────────────────────────────────────────────────────────────
-var weaponImgCache = {};
-
-function renderWeapons() {
-  var grid = document.getElementById("weapons-grid");
-  if (grid.children.length > 0) return;
-  WEAPONS.forEach(function(w) {
-    var card = document.createElement("div");
-    card.className = "weapon-card";
-    card.onclick = function(){ showWeaponModal(w); };
-    var imgHtml = "<div class='wc-img-ph'>" + getWeaponEmoji(w.id) + "</div>";
-    card.innerHTML = imgHtml +
-      "<div class='wc-body'>" +
-      "<div class='wc-nome'>" + w.nome + "</div>" +
-      "<div class='wc-sub'>" + w.sottotipo + "</div>" +
-      "<div class='wc-intro'>Introdotto: <strong>" + w.introdotto + "</strong></div>" +
-      "<div class='wc-chi'>" + w.introdotto_da + "</div>" +
-      "<div class='wc-tags'>" + w.tags.map(function(t){return "<span class='wc-tag'>"+t+"</span>";}).join("") + "</div>" +
-      "</div>";
+var weaponImgCache={};
+function renderWeapons(){
+  var grid=document.getElementById("weapons-grid");
+  if(grid.children.length>0)return;
+  WEAPONS.forEach(function(w){
+    var card=document.createElement("div");
+    card.className="weapon-card";
+    card.onclick=function(){showWeaponModal(w);};
+    card.innerHTML="<div class='wc-img-ph'>"+getWeaponEmoji(w.id)+"</div>"+
+      "<div class='wc-body'><div class='wc-nome'>"+w.nome+"</div>"+
+      "<div class='wc-sub'>"+w.sottotipo+"</div>"+
+      "<div class='wc-intro'>Introdotto: <strong>"+w.introdotto+"</strong></div>"+
+      "<div class='wc-chi'>"+w.introdotto_da+"</div>"+
+      "<div class='wc-tags'>"+w.tags.map(function(t){return"<span class='wc-tag'>"+t+"</span>";}).join("")+"</div></div>";
     grid.appendChild(card);
-    // Lazy load immagine Wikipedia
-    loadWeaponImg(w, card.querySelector(".wc-img-ph"));
+    loadWeaponImg(w,card.querySelector(".wc-img-ph"));
   });
 }
-
-function loadWeaponImg(w, placeholder) {
-  fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(w.wiki))
+function loadWeaponImg(w,placeholder){
+  fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+encodeURIComponent(w.wiki))
     .then(function(r){return r.json();})
     .then(function(data){
-      if(data.thumbnail && data.thumbnail.source){
-        weaponImgCache[w.id] = data.thumbnail.source;
-        var img = document.createElement("img");
-        img.className="wc-img"; img.src=data.thumbnail.source; img.alt=w.nome;
-        if(placeholder && placeholder.parentNode) placeholder.parentNode.replaceChild(img,placeholder);
+      if(data.thumbnail&&data.thumbnail.source){
+        weaponImgCache[w.id]=data.thumbnail.source;
+        var img=document.createElement("img");
+        img.className="wc-img";img.src=data.thumbnail.source;img.alt=w.nome;
+        if(placeholder&&placeholder.parentNode)placeholder.parentNode.replaceChild(img,placeholder);
       }
     }).catch(function(){});
 }
-
-function showWeaponModal(w) {
-  document.getElementById("wm-title").textContent = w.nome;
-  document.getElementById("wm-sub").textContent = w.sottotipo;
-  document.getElementById("wm-chi").textContent = w.introdotto_da;
-  document.getElementById("wm-prima").textContent = w.prima_uso;
-  document.getElementById("wm-desc").textContent = w.desc;
-  document.getElementById("wm-impatto").textContent = w.impatto;
-  document.getElementById("wm-wiki").href = "https://en.wikipedia.org/wiki/" + w.wiki;
-  var wrap = document.getElementById("wm-img-wrap");
+function showWeaponModal(w){
+  document.getElementById("wm-title").textContent=w.nome;
+  document.getElementById("wm-sub").textContent=w.sottotipo;
+  document.getElementById("wm-chi").textContent=w.introdotto_da;
+  document.getElementById("wm-prima").textContent=w.prima_uso;
+  document.getElementById("wm-desc").textContent=w.desc;
+  document.getElementById("wm-impatto").textContent=w.impatto;
+  document.getElementById("wm-wiki").href="https://en.wikipedia.org/wiki/"+w.wiki;
+  var wrap=document.getElementById("wm-img-wrap");
   if(weaponImgCache[w.id]){
-    wrap.innerHTML = "<img class='wm-img' src='"+weaponImgCache[w.id]+"' alt='"+w.nome+"'/>";
-  } else {
-    wrap.innerHTML = "<div class='wm-img-ph'>" + getWeaponEmoji(w.id) + "</div>";
-    fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(w.wiki))
+    wrap.innerHTML="<img class='wm-img' src='"+weaponImgCache[w.id]+"' alt='"+w.nome+"'/>";
+  }else{
+    wrap.innerHTML="<div class='wm-img-ph'>"+getWeaponEmoji(w.id)+"</div>";
+    fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+encodeURIComponent(w.wiki))
       .then(function(r){return r.json();})
       .then(function(data){
-        if(data.thumbnail){
-          weaponImgCache[w.id]=data.thumbnail.source;
-          wrap.innerHTML="<img class='wm-img' src='"+data.thumbnail.source+"' alt='"+w.nome+"'/>";
-        }
+        if(data.thumbnail){weaponImgCache[w.id]=data.thumbnail.source;wrap.innerHTML="<img class='wm-img' src='"+data.thumbnail.source+"' alt='"+w.nome+"'/>";}
       }).catch(function(){});
   }
   document.getElementById("weapon-modal").classList.add("vis");
 }
-function closeWeaponModal(){
-  document.getElementById("weapon-modal").classList.remove("vis");
-}
-document.getElementById("weapon-modal").addEventListener("click",function(e){
-  if(e.target===this) closeWeaponModal();
-});
-
-// ── PERDITE ──────────────────────────────────────────────────────────────────
-var currentChartYear = 1918;
-
-function initPerditeSection() {
-  var tabs = document.getElementById("year-tabs");
-  if (tabs.children.length > 0) return;
-  [1914,1915,1916,1917,1918].forEach(function(y) {
-    var btn = document.createElement("button");
-    btn.className = "yr-btn" + (y===1918?" active":"");
-    btn.textContent = y;
-    btn.onclick = function() {
-      document.querySelectorAll(".yr-btn").forEach(function(b){b.classList.remove("active");});
-      btn.classList.add("active");
-      currentChartYear = y;
-      renderBars(y);
-    };
-    tabs.appendChild(btn);
-  });
-  renderBars(1918);
-}
-
-function renderBars(year) {
-  var yr = String(year);
-  // Raccogli dati
-  var data = [];
-  NATIONS.forEach(function(n) {
-    var dati = n.anni[yr];
-    if (!dati) return;
-    var p = dati.perdite_cumulative || 0;
-    var sch = n.schieramento[yr] || "neutrale";
-    data.push({nome:n.nome, bandiera:n.bandiera||"", perdite:p, sch:sch});
-  });
-  // Ordina per perdite
-  data.sort(function(a,b){return b.perdite - a.perdite;});
-  var maxP = data[0] ? data[0].perdite : 1;
-  var totale = data.reduce(function(s,d){return s+d.perdite;},0);
-
-  var container = document.getElementById("bars-container");
-  container.innerHTML = "";
-
-  data.forEach(function(d) {
-    if (d.perdite === 0 && year < 1917) return;
-    var pct = maxP > 0 ? Math.max(2, Math.round(d.perdite/maxP*100)) : 2;
-    var color = d.sch==="intesa"?"#1e3a8e":d.sch==="imp_centrali"?"#8e1e1e":"#3a2a2a";
-    var row = document.createElement("div");
-    row.className = "bar-row";
-    var perditeStr = d.perdite > 0 ? d.perdite.toLocaleString("it") : "dati non disponibili";
-    row.innerHTML =
-      "<div class='bar-label'><span class='bar-flag'>"+d.bandiera+"</span>"+d.nome+"</div>"+
-      "<div class='bar-wrap'>"+
-        "<div class='bar-fill' style='width:0%;background:"+color+"' data-pct='"+pct+"'>"+
-          "<span class='bar-val'>"+perditeStr+"</span>"+
-        "</div>"+
-      "</div>";
-    container.appendChild(row);
-  });
-
-  // Animazione barre
-  requestAnimationFrame(function(){
-    requestAnimationFrame(function(){
-      container.querySelectorAll(".bar-fill").forEach(function(bar){
-        bar.style.width = bar.dataset.pct + "%";
-      });
-    });
-  });
-
-  // Totale
-  document.getElementById("totale-num").textContent = totale.toLocaleString("it");
-  document.getElementById("totale-sub").textContent =
-    "Perdite militari cumulative al "+year+" — Intesa + Imp. Centrali";
-}
+function closeWeaponModal(){document.getElementById("weapon-modal").classList.remove("vis");}
+document.getElementById("weapon-modal").addEventListener("click",function(e){if(e.target===this)closeWeaponModal();});
 
 function getWeaponEmoji(id){
   var m={mitragliatrice:"🔫",gas_velenosi:"☠️",carro_armato:"🛡️",sommergibile:"🐟",
@@ -889,6 +686,60 @@ function getWeaponEmoji(id){
     granata_a_mano:"💣",corazzate:"⚓",mine_navali:"⚠️",siluro:"🎯"};
   return m[id]||"⚙️";
 }
+
+// ── PERDITE ──────────────────────────────────────────────────────────────────
+function initPerditeSection(){
+  var tabs=document.getElementById("year-tabs");
+  if(tabs.children.length>0)return;
+  [1914,1915,1916,1917,1918].forEach(function(y){
+    var btn=document.createElement("button");
+    btn.className="yr-btn"+(y===1918?" active":"");
+    btn.textContent=y;
+    btn.onclick=function(){
+      document.querySelectorAll(".yr-btn").forEach(function(b){b.classList.remove("active");});
+      btn.classList.add("active");
+      renderBars(y);
+    };
+    tabs.appendChild(btn);
+  });
+  renderBars(1918);
+}
+function renderBars(year){
+  var yr=String(year);
+  var data=[];
+  NATIONS.forEach(function(n){
+    var dati=n.anni[yr];if(!dati)return;
+    var p=dati.perdite_cumulative||0;
+    var sch=n.schieramento[yr]||"neutrale";
+    data.push({nome:n.nome,bandiera:n.bandiera||"",perdite:p,sch:sch});
+  });
+  data.sort(function(a,b){return b.perdite-a.perdite;});
+  var maxP=data[0]?data[0].perdite:1;
+  var totale=data.reduce(function(s,d){return s+d.perdite;},0);
+  var container=document.getElementById("bars-container");
+  container.innerHTML="";
+  data.forEach(function(d){
+    if(d.perdite===0)return;
+    var pct=Math.max(2,Math.round(d.perdite/maxP*100));
+    var color=d.sch==="intesa"?"#1e3a8e":d.sch==="imp_centrali"?"#8e1e1e":"#3a2a2a";
+    var row=document.createElement("div");row.className="bar-row";
+    row.innerHTML="<div class='bar-label'><span class='bar-flag'>"+d.bandiera+"</span>"+d.nome+"</div>"+
+      "<div class='bar-wrap'><div class='bar-fill' style='width:0%;background:"+color+"' data-pct='"+pct+"'>"+
+      "<span class='bar-val'>"+d.perdite.toLocaleString("it")+"</span></div></div>";
+    container.appendChild(row);
+  });
+  requestAnimationFrame(function(){requestAnimationFrame(function(){
+    container.querySelectorAll(".bar-fill").forEach(function(b){b.style.width=b.dataset.pct+"%";});
+  });});
+  document.getElementById("totale-num").textContent=totale.toLocaleString("it");
+  document.getElementById("totale-sub").textContent="Perdite militari cumulative al "+year;
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+window.addEventListener("load", function(){
+  renderEvents();
+  onSlider(0);
+});
 </script>
 </body>
 </html>
