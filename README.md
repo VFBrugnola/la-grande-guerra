@@ -23,13 +23,13 @@ Una mappa interattiva didattica della Prima Guerra Mondiale (1914–1918), pensa
 la-grande-guerra/
 ├── index.html
 └── data/
-├── borders_1914.js ← confini storici Europa 1914 (GeoJSON)
-├── nations.js ← 15 nazioni con descrizioni per anno
-├── events.js ← 32 eventi (battaglie, diplomatici, navali, atrocità)
-├── fronts.js ← linee dei fronti per fase
-├── movements.js ← frecce operazioni militari
-├── weapons.js ← 12 armamenti con schede
-└── periods.js ← 6 fasi della guerra
+    ├── borders_1914.js   ← confini storici Europa 1914 (GeoJSON)
+    ├── nations.js        ← 15 nazioni con descrizioni per anno
+    ├── events.js         ← 32 eventi (battaglie, diplomatici, navali, atrocità)
+    ├── fronts.js         ← linee dei fronti per fase
+    ├── movements.js      ← frecce operazioni militari
+    ├── weapons.js        ← 12 armamenti con schede
+    └── periods.js        ← 6 fasi della guerra
 
 
 ## Come aggiornare i dati
