@@ -518,12 +518,17 @@ function getFrontsForMonth(yyyymm){
 
 function renderFronts(yyyymm){
   frontsLayer.clearLayers();
+  if(typeof FRONTS==="undefined")return;
   var toShow=getFrontsForMonth(yyyymm);
   toShow.forEach(function(fr){
     var pts=fr.coordinates.map(function(c){return[c[1],c[0]];});
-    var line=L.polyline(pts,{color:fr.colore,weight:3,opacity:0.9,
-      dashArray:fr.fronte==="orientale"?"6,4":null});
-    line.bindTooltip(fr.label,{sticky:true});
+    // Ombra per leggibilità
+    var shadow=L.polyline(pts,{color:"#000",weight:6,opacity:0.4});
+    frontsLayer.addLayer(shadow);
+    // Linea principale
+    var dashArr = fr.fronte==="orientale"?"8,5":fr.fronte==="balcanico"?"4,4":null;
+    var line=L.polyline(pts,{color:fr.colore,weight:3.5,opacity:1,dashArray:dashArr});
+    line.bindTooltip("<strong>"+fr.label+"</strong>",{sticky:true,className:"leaflet-tooltip"});
     frontsLayer.addLayer(line);
   });
 }
